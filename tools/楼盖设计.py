@@ -13,14 +13,14 @@ gamma_G, gamma_Q = 1.3, 1.5
 covering_soil_thickness, ceiling_thickness, ceiling_width = 0.3, 0.08, 2.1
 
 column = 0.5  # 柱宽 m
-grad_main, graid_minor, grad_ceiling = 6.300, 6.800, 2.100  # 轴网中梁的长度
+grad_main, grad_minor, grad_ceiling = 6.300, 6.800, 2.100  # 轴网中梁的长度
 
 l_0_main = grad_main  # 按弹性理论计算，主梁长度取支承中心线间距离
-h_ceiling, h_main = ceiling_thickness, l_0_main / 12
+h_ceiling, h_main = ceiling_thickness, 0.6  # l_0_main / 10
 b_ceiling, b_main = ceiling_width, h_main / 2.5
-l_n_minor = graid_minor - b_main
+l_n_minor = grad_minor - b_main
 l_0_minor = l_n_minor
-h_minor = l_0_minor / 15
+h_minor = 0.5  # l_0_minor / 14
 b_minor = h_minor / 2.5
 l_0_minor_end = min(1.025 * l_n_minor, l_n_minor + b_main / 2)
 l_n_ceiling = grad_ceiling - b_minor
@@ -29,12 +29,16 @@ l_0_ceiling_end = min(l_n_ceiling + h_ceiling / 2, l_n_ceiling + b_minor / 2)
 print(
     f"板 h: {h_ceiling:.2f}m b: {b_ceiling:.2f}m; \n主梁 h: {h_main:.2f}m b: {b_main:.2f}m; \n次梁 h: {h_minor:.2f}m b: {b_minor:.2f}m"
 )
+print(
+    f"板计算跨度{l_0_ceiling:.2f}m 边缘{l_0_ceiling_end:.2f}m\n次梁计算跨度{l_0_minor:.2f}m 边缘{l_0_minor_end:.2f}m\n板计算跨度{l_0_main:.2f}m"
+)
 s_n_minor = grad_ceiling - b_minor  # 次梁净距
+s_n_main = grad_minor - b_main  # 主梁净距
 
-c = 20
+c_1, c_2 = 20, 25
 f_c, f_t, f_y_300, f_y_400 = 14.3, 1.43, 270, 360
 d_ceiling = 10
-d_minor = 20
+d_minor = 22
 d_main = 25
 d_stirrup = 10
 alpha_1, beta_1 = 1.0, 0.8
@@ -42,7 +46,7 @@ alpha_s_max = 0.384
 xi_b = 0.518
 
 # 2号主梁设计弯矩，请自行按弯矩包络图确定
-M_designed_value_main_2 = 38.3
+M_designed_value_main_2 = -9.31
 
 
 def alpha_ms_inquire():
@@ -135,9 +139,9 @@ def minor_M_design_value_calculate(alpha_ms, g_k, q_k, l_0, l_0_e):
         + reinforced_concrete_bulk_density * (h_minor - h_ceiling) * b_minor
     )
     print(f"次梁永久载荷为 {g_k:.2f} kN/m")
-    q_k *= grad_ceiling * gamma_Q
+    q_k *= grad_ceiling
     g, q = load_calculate(g_k, q_k)
-    print(f"次梁永久载荷设计值为 {g:.2f} kN/m，次梁活载荷设计值为 {q} kN/m")
+    print(f"次梁永久载荷设计值为 {g:.2f} kN/m，次梁活载荷设计值为 {q:.2f} kN/m")
     return g, q, M_design_value_calculate(alpha_ms, g, q, l_0, l_0_e)
 
 
@@ -163,54 +167,68 @@ def is_xi_illegal(xis):
     print(f"xi小于xi_b：{xi_b}")
 
 
-def alpha_ses_calculate(M_designed_values, h_0):
-    return [m * 1e3 / (alpha_1 * f_c * b_ceiling * h_0**2) for m in M_designed_values]
+def alpha_ses_calculate(M_designed_values, h_0, b, b_f):
+    result = []
+    for m in M_designed_values:
+        if m > 0:
+            result.append(abs(m * 1e3 / (alpha_1 * f_c * b_f * h_0**2)))
+        else:
+            result.append(abs(m * 1e3 / (alpha_1 * f_c * b * h_0**2)))
+    return result
 
 
 def xis_calculate(alpha_ses):
-    return [1 - (1 - alpha_s) ** 0.5 for alpha_s in alpha_ses]
+    return [1 - (1 - 2 * alpha_s) ** 0.5 for alpha_s in alpha_ses]
 
 
 def gamma_ses_calculate(alpha_ses):
-    return [(1 + (1 - alpha_s) ** 0.5) / 2 for alpha_s in alpha_ses]
+    return [(1 + (1 - 2 * alpha_s) ** 0.5) / 2 for alpha_s in alpha_ses]
 
 
-def A_ses_calculate(xis, h_0, f_y):
-    return [1e3 * xi * b_ceiling * h_0 * alpha_1 * f_c / f_y for xi in xis]
+def A_ses_calculate(M, xis, h_0, f_y, b, b_f):
+    result = []
+    for i, xi in enumerate(xis):
+        if M[i] > 0:
+            result.append(1e3 * xi * b_f * h_0 * alpha_1 * f_c / f_y)
+        else:
+            result.append(1e3 * xi * b * h_0 * alpha_1 * f_c / f_y)
+    return result
 
 
 def A_ses_calculate2(Ms, gamma_ses, h_0, f_y):
-    return [1e6 * m / (gamma_s * f_y * h_0) for m, gamma_s in zip(Ms, gamma_ses)]
+    return [1e6 * abs(m) / (gamma_s * f_y * h_0) for m, gamma_s in zip(Ms, gamma_ses)]
 
 
 def ceiling_reinforcement(M_designed_values_ceiling):
-    h_0 = h_ceiling * 1000 - c - d_ceiling / 2
+    h_0 = h_ceiling * 1000 - c_1 - d_ceiling / 2
     print(f"板 h_0为{h_0}mm")
-    alpha_ses = alpha_ses_calculate(M_designed_values_ceiling, h_0)
+    alpha_ses = alpha_ses_calculate(
+        M_designed_values_ceiling, h_0, b_ceiling, b_ceiling
+    )
     print(f"板 alpha_s支座-跨中依次为{[round(alpha_s, 3) for alpha_s in alpha_ses]}")
     is_alpha_s_illegal(alpha_ses)
     xis = xis_calculate(alpha_ses)
     print(f"板 xi支座-跨中依次为{[round(xi, 3) for xi in xis]}")
     is_xi_illegal(xis)
-    A_ses = A_ses_calculate(xis, h_0, f_y_300)
+    A_ses = A_ses_calculate(
+        M_designed_values_ceiling, xis, h_0, f_y_300, b_ceiling, b_ceiling
+    )
     print(f"板 A_s支座-跨中依次为{[round(A_s, 3) for A_s in A_ses]}")
 
 
-def b_f_calculate():
-    return min(grad_ceiling, b_minor + s_n_minor, b_minor + 12 * h_ceiling)
-
-
 def minor_reinforcement(M_designed_values_minor):
-    h_0 = h_minor * 1000 - c - d_minor / 2 - d_stirrup
+    h_0 = h_minor * 1000 - c_2 - d_minor / 2 - d_stirrup
     print(f"次梁 一排纵筋h_0为{h_0:.0f}mm")
-    alpha_ses = alpha_ses_calculate(M_designed_values_minor, h_0)
-    print(f"次梁 alpha_s支座-跨中依次为{[round(alpha_s, 5) for alpha_s in alpha_ses]}")
+    b_f = min(grad_ceiling, b_minor + s_n_minor, b_minor + 12 * h_ceiling)
+    print(f"次梁翼缘宽度为{b_f:.3f}m")
+    alpha_ses = alpha_ses_calculate(M_designed_values_minor, h_0, b_minor, b_f)
+    print(f"次梁 alpha_s支座-跨中依次为{[round(alpha_s, 3) for alpha_s in alpha_ses]}")
     is_alpha_s_illegal(alpha_ses)
     xis = xis_calculate(alpha_ses)
-    print(f"次梁 xi支座-跨中依次为{[round(xi, 5) for xi in xis]}")
+    print(f"次梁 xi支座-跨中依次为{[round(xi, 3) for xi in xis]}")
     is_xi_illegal(xis)
-    A_ses = A_ses_calculate(xis, h_0, f_y_400)
-    print(f"次梁 A_s支座-跨中依次为{[round(A_s, 5) for A_s in A_ses]}mm²")
+    A_ses = A_ses_calculate(M_designed_values_minor, xis, h_0, f_y_400, b_minor, b_f)
+    print(f"次梁 A_s支座-跨中依次为{[round(A_s, 0) for A_s in A_ses]}mm²")
     print("-" * 10 + f"Warning: 次梁还未配箍筋" + "-" * 10)
 
 
@@ -252,10 +270,10 @@ def main_reinforcement(etas, g, q):
         * gamma_G
     )
     q = q * gamma_Q * max(etas)
-    print(f"主梁永久载荷设计值为 {g:.2f} kN/m²，主梁活载荷设计值为 {q:.2f} kN/m²")
-    M_1_max = 0.244 * g * l_0_main + 0.289 * g * l_0_main
-    M_B_max = -0.267 * g * l_0_main - 0.311 * g * l_0_main
-    M_2_max = -0.067 * g * l_0_main - 0.2 * g * l_0_main
+    print(f"主梁永久载荷设计值为 {g:.2f} kN，主梁活载荷设计值为 {q:.2f} kN")
+    M_1_max = 0.244 * g * l_0_main + 0.289 * q * l_0_main
+    M_B_max = -0.267 * g * l_0_main - 0.311 * q * l_0_main
+    M_2_max = 0.067 * g * l_0_main + 0.2 * q * l_0_main
     V_A_max = 0.733 * g + 0.866 * q
     V_Bl_max = -1.267 * g - 1.311 * q
     V_Br_max = 1 * g + 1.222 * q
@@ -296,21 +314,22 @@ def main_reinforcement(etas, g, q):
     print(f"{M_1l:8.2f}{M_1r:8.2f}{M_b:8.2f}{M_2l:8.2f}{M_2r:8.2f}{M_c:8.2f}")
     draw_bending_moment_envelope_diagram(Ms1, Ms2, Ms3)
 
-    h_0 = h_main * 1000 - c - d_ceiling - d_minor - d_main / 2
-    print(f"次梁 一排纵筋h_0为{h_0:.0f}mm")
+    h_0 = h_main * 1000 - c_2 - d_ceiling - d_minor - d_main / 2
+    print(f"主梁 一排纵筋h_0为{h_0:.0f}mm")
+    b_f = min(l_0_main / 3, b_main + s_n_minor)
     M_designed_values_main = [
         M_1_max,
-        -M_B_max + (V_A_max + V_Bl_max) * column / 2,
-        -M_2_max,
+        M_B_max - (-g - q) * column / 2,
+        M_2_max,
         M_designed_value_main_2,
     ]
-    alpha_ses = alpha_ses_calculate(M_designed_values_main, h_0)
-    print(f"主梁 alpha_s支座-跨中依次为{[round(alpha_s, 5) for alpha_s in alpha_ses]}")
+    alpha_ses = alpha_ses_calculate(M_designed_values_main, h_0, b_main, b_f)
+    print(f"主梁 alpha_s支座-跨中依次为{[round(alpha_s, 3) for alpha_s in alpha_ses]}")
     is_alpha_s_illegal(alpha_ses)
     gamma_ses = gamma_ses_calculate(alpha_ses)
-    print(f"主梁 gamma_ses支座-跨中依次为{[round(gamma_s, 5) for gamma_s in gamma_ses]}")
+    print(f"主梁 gamma_ses支座-跨中依次为{[round(gamma_s, 3) for gamma_s in gamma_ses]}")
     A_ses = A_ses_calculate2(M_designed_values_main, gamma_ses, h_0, f_y_400)
-    print(f"主梁 A_s支座-跨中依次为{[round(A_s, 5) for A_s in A_ses]}mm²")
+    print(f"主梁 A_s支座-跨中依次为{[round(A_s, 0) for A_s in A_ses]}mm²")
     print("-" * 10 + f"Warning: 主梁还未配箍筋" + "-" * 10)
 
 
@@ -339,8 +358,6 @@ if __name__ == "__main__":
         alpha_vs, g, q, l_0_minor, l_0_minor_end
     )
     print(f"次梁剪力设计值支座-跨中依次为{[round(Fn, 2) for Fn in Fn_designed_values_minor]}kN")
-    b_f = b_f_calculate()
-    print(f"次梁翼缘宽度为{b_f:.3f}m")
     minor_reinforcement(M_designed_values_minor)
 
     etas_gen = etas_inquire()
